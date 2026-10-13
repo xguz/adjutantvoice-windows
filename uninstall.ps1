@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-  Remove the AdjutantVoice scheduled task and Claude Code registrations installed by install.ps1.
+  Remove the AdjutantVoice scheduled task and the Claude Code, Claude Desktop and Cursor
+  registrations installed by install.ps1.
 
 .PARAMETER RemoveVenv
   Also delete ~/.adjutantvoice/venv. Your .env and voice clones in ~/.adjutantvoice are always kept,
@@ -16,7 +17,7 @@ $Here = $PSScriptRoot
 $AvHome = Join-Path $env:USERPROFILE ".adjutantvoice"
 $Py = Join-Path $AvHome "venv\Scripts\python.exe"
 $TaskName = "AdjutantVoice MCP"
-$helper = Join-Path $Here "claude_config.py"
+$helper = Join-Path $Here "client_config.py"
 
 function Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 
@@ -30,24 +31,27 @@ Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" 
     Where-Object { $_.CommandLine -like "*run_mcp_server.pyw*" -or ($_.CommandLine -like "*multiprocessing*" -and $_.ExecutablePath -like "*\.adjutantvoice\venv\*") } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
-Step "Removing Claude Code registration on Windows"
+Step "Removing Claude Code, Claude Desktop and Cursor registrations on Windows"
 if (Get-Command claude -ErrorAction SilentlyContinue) {
     & claude mcp remove adjutantvoice --scope user
 } elseif (Test-Path $Py) {
-    & $Py $helper mcp-remove
+    & $Py $helper code-remove
 } else {
-    & py -3 $helper mcp-remove
+    & py -3 $helper code-remove
 }
-if (Test-Path $Py) { & $Py $helper md-remove } else { & py -3 $helper md-remove }
+$hostPy = if (Test-Path $Py) { $Py } else { "py" }
+foreach ($cmd in "md-remove", "desktop-remove", "cursor-remove") {
+    if ($hostPy -eq "py") { & py -3 $helper $cmd } else { & $hostPy $helper $cmd }
+}
 
 if (Get-Command wsl -ErrorAction SilentlyContinue) {
     Step "Removing Claude Code registration in WSL"
     $wslHelper = (& wsl -e wslpath -a $helper) -join ""
-    & wsl -e bash -lc "command -v claude >/dev/null && claude mcp remove adjutantvoice --scope user || python3 '$wslHelper' mcp-remove"
+    & wsl -e bash -lc "command -v claude >/dev/null && claude mcp remove adjutantvoice --scope user || python3 '$wslHelper' code-remove"
     & wsl -e python3 $wslHelper md-remove
 }
 
-Remove-Item (Join-Path $AvHome "run_mcp_server.pyw") -ErrorAction SilentlyContinue
+foreach ($f in "run_mcp_server.pyw", "stdio_bridge.py") { Remove-Item (Join-Path $AvHome $f) -ErrorAction SilentlyContinue }
 if ($RemoveVenv) {
     Step "Deleting $AvHome\venv"
     Remove-Item -Recurse -Force (Join-Path $AvHome "venv")

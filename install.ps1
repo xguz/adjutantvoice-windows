@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
   Install AdjutantVoice as an always-on, windowless MCP server on Windows and
-  register it with Claude Code on Windows and in WSL. Safe to re-run.
+  register it with Claude Code (Windows and WSL), Claude Desktop chat and Cursor.
+  Safe to re-run.
 
 .PARAMETER Source
   pip requirement for AdjutantVoice. Defaults to a pinned commit of the fork.
@@ -18,7 +19,9 @@ param(
     [string]$Torch = "xpu",
     [switch]$SkipClaude,
     [switch]$SkipWsl,
-    [switch]$SkipClaudeMd
+    [switch]$SkipClaudeMd,
+    [switch]$SkipDesktop,
+    [switch]$SkipCursor
 )
 
 $ErrorActionPreference = "Stop"
@@ -94,7 +97,7 @@ if (-not (Test-Path $EnvFile)) {
 } else {
     Step "Keeping existing $EnvFile"
 }
-Copy-Item (Join-Path $Here "run_mcp_server.pyw") (Join-Path $AvHome "run_mcp_server.pyw") -Force
+foreach ($f in "run_mcp_server.pyw", "stdio_bridge.py") { Copy-Item (Join-Path $Here $f) (Join-Path $AvHome $f) -Force }
 
 $port = 8222
 $portLine = Select-String -Path $EnvFile -Pattern '^\s*AV_MCP_PORT\s*=\s*(\d+)' | Select-Object -Last 1
@@ -134,7 +137,7 @@ if (-not $up) { throw "Server did not start within 5 minutes; see $AvHome\server
 Write-Host "    listening on $McpUrl"
 
 # --- Claude Code: Windows ------------------------------------------------------
-$helper = Join-Path $Here "claude_config.py"
+$helper = Join-Path $Here "client_config.py"
 $snippet = Join-Path $Here "CLAUDE.snippet.md"
 if (-not $SkipClaude) {
     Step "Registering the MCP server with Claude Code on Windows"
@@ -142,7 +145,7 @@ if (-not $SkipClaude) {
         $null = Invoke-Quiet claude @("mcp", "remove", "adjutantvoice", "--scope", "user")
         Invoke-Checked claude @("mcp", "add", "--transport", "http", "--scope", "user", "adjutantvoice", $McpUrl)
     } else {
-        Invoke-Checked $Py @($helper, "mcp-add", $McpUrl)
+        Invoke-Checked $Py @($helper, "code-add", $McpUrl)
     }
     if (-not $SkipClaudeMd) { Invoke-Checked $Py @($helper, "md-add", $snippet) }
 }
@@ -160,11 +163,25 @@ if (-not $SkipClaude -and -not $SkipWsl -and (Get-Command wsl -ErrorAction Silen
     if ($hasClaude -eq "yes") {
         Invoke-Checked wsl @("-e", "bash", "-lc", "claude mcp remove adjutantvoice --scope user >/dev/null 2>&1; claude mcp add --transport http --scope user adjutantvoice $McpUrl")
     } else {
-        Invoke-Checked wsl @("-e", "python3", $wslHelper, "mcp-add", $McpUrl)
+        Invoke-Checked wsl @("-e", "python3", $wslHelper, "code-add", $McpUrl)
     }
     if (-not $SkipClaudeMd) { Invoke-Checked wsl @("-e", "python3", $wslHelper, "md-add", $wslSnippet) }
 }
 
+# --- Claude Desktop chat -------------------------------------------------------------
+# Chat only launches stdio servers, so register the bridge that forwards to the running server.
+if (-not $SkipDesktop) {
+    Step "Registering the stdio bridge with Claude Desktop chat"
+    Invoke-Checked $Py @($helper, "desktop-add", $Py, (Join-Path $AvHome "stdio_bridge.py"))
+    Write-Host "    Fully quit Claude Desktop (tray icon > Quit) and reopen it to load the change."
+}
+
+# --- Cursor ----------------------------------------------------------------------------
+if (-not $SkipCursor -and (Test-Path (Join-Path $env:USERPROFILE ".cursor"))) {
+    Step "Registering the MCP server with Cursor"
+    Invoke-Checked $Py @($helper, "cursor-add", $McpUrl)
+}
+
 Step "Done"
 Write-Host "    Config: $EnvFile   Log: $AvHome\server.log"
-Write-Host "    New Claude Code sessions now have the adjutantvoice tools (tts_speak, tts_stream, tts_file)."
+Write-Host "    New sessions now have the adjutantvoice tools (tts_speak, tts_stream, tts_file)."

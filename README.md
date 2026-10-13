@@ -1,6 +1,6 @@
 # adjutantvoice-windows
 
-Runs [AdjutantVoice](https://github.com/xguz/AdjutantVoice) (OmniVoice text-to-speech) as an always-on, windowless MCP server on Windows, and connects it to Claude Code on Windows and in WSL, so Claude can speak on your speakers.
+Runs [AdjutantVoice](https://github.com/xguz/AdjutantVoice) (OmniVoice text-to-speech) as an always-on, windowless MCP server on Windows, and connects it to Claude Code (Windows and WSL), Claude Desktop chat and Cursor, so the assistant can speak on your speakers.
 
 Built and tested on an Intel Arc 140V laptop (Core Ultra 7 258V, 32 GB, Windows 11). It uses the [xguz/AdjutantVoice](https://github.com/xguz/AdjutantVoice) fork, which adds non-CUDA support, an idle-stopping worker process, and Windows fixes on top of [voidhaze/AdjutantVoice](https://github.com/voidhaze/AdjutantVoice).
 
@@ -8,7 +8,9 @@ Built and tested on an Intel Arc 140V laptop (Core Ultra 7 258V, 32 GB, Windows 
 
 - **Scheduled task "AdjutantVoice MCP"** starts the server at logon, without a window, listening on `127.0.0.1:8222` only. It runs in your session, so audio reaches your speakers.
 - **Model loaded on demand:** the model runs in a worker process that exits after 5 idle minutes. The server alone uses about 0.1 GB; a warm worker uses about 6.5 GB of RAM (shared with the Intel GPU).
-- **Claude Code integration:** the `adjutantvoice` MCP server is registered at user scope on Windows and in WSL, so every session gets `tts_speak`, `tts_stream` and `tts_file`.
+- **Claude Code:** the `adjutantvoice` MCP server is registered at user scope on Windows and in WSL, so every session gets `tts_speak`, `tts_stream` and `tts_file`.
+- **Claude Desktop chat:** chat only launches stdio MCP servers, so it gets `stdio_bridge.py`, a small proxy that forwards to the running server. Chat and Code share one server and one model.
+- **Cursor:** registered in `~/.cursor/mcp.json` as an HTTP server (only if Cursor is installed).
 - **Spoken announcements:** a short block in your user-level `CLAUDE.md` asks Claude to say one sentence when it finishes a longer task or needs you.
 
 ## Requirements
@@ -35,8 +37,21 @@ It's safe to re-run, for example after changing the port or updating the pinned 
 | `-SkipWsl` | Don't touch WSL |
 | `-SkipClaude` | Don't register with Claude Code at all |
 | `-SkipClaudeMd` | Register the MCP server but don't add the announcements block to `CLAUDE.md` |
+| `-SkipDesktop` | Don't register with Claude Desktop chat |
+| `-SkipCursor` | Don't register with Cursor |
 
 First install downloads PyTorch (~1 GB) and the OmniVoice model (~2 GB).
+
+Afterwards, **fully quit Claude Desktop** (tray icon > Quit) and reopen it so chat loads the bridge, and reload Cursor's window (or toggle the server in Cursor Settings > MCP).
+
+Every config file the installer edits is backed up once, next to it, as `<file>.bak-adjutantvoice`. Claude Desktop from the Microsoft Store keeps its config under `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\`; the installer finds it there.
+
+## Spoken announcements
+
+Claude Code gets them automatically from the block the installer adds to `~/.claude/CLAUDE.md` ([CLAUDE.snippet.md](CLAUDE.snippet.md)). The other clients have no instructions file the installer can safely edit, so paste instructions yourself:
+
+- **Claude Desktop chat:** Settings > Profile > personal preferences (or a Project's instructions). In chat every reply is "done", so ask for less, e.g. *"You can speak aloud with the adjutantvoice tts_speak tool. Use it only when I ask, or with one short sentence when a long task finishes."*
+- **Cursor:** Cursor Settings > Rules > User Rules, with the bullet list from [CLAUDE.snippet.md](CLAUDE.snippet.md). For a single project, put it in `.cursor/rules/` or `AGENTS.md` instead.
 
 ## Configure
 
@@ -72,7 +87,7 @@ On Intel XPU (torch 2.14.1+xpu), fp32 `softmax` / `log_softmax` return wrong val
 ## Uninstall
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\uninstall.ps1            # task + Claude Code registrations
+powershell -ExecutionPolicy Bypass -File .\uninstall.ps1            # task + all client registrations
 powershell -ExecutionPolicy Bypass -File .\uninstall.ps1 -RemoveVenv
 ```
 
@@ -86,4 +101,5 @@ Your `.env`, voice clones and the Hugging Face model cache are kept.
 | `run_mcp_server.pyw` | Windowless launcher started by the scheduled task |
 | `.env.example` | Default settings |
 | `CLAUDE.snippet.md` | Announcements block added to `~/.claude/CLAUDE.md` |
-| `claude_config.py` | Edits `~/.claude.json` and `CLAUDE.md` when the `claude` CLI isn't available (Windows desktop app); also used inside WSL |
+| `stdio_bridge.py` | stdio-to-HTTP proxy that Claude Desktop chat launches |
+| `client_config.py` | Adds/removes the server in Claude Code (`~/.claude.json`, when the `claude` CLI isn't available), Claude Desktop and Cursor configs, and the `CLAUDE.md` block; also used inside WSL |
