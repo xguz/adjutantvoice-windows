@@ -17,19 +17,33 @@ $Here = $PSScriptRoot
 $AvHome = Join-Path $env:USERPROFILE ".adjutantvoice"
 $Py = Join-Path $AvHome "venv\Scripts\python.exe"
 $TaskName = "AdjutantVoice MCP"
+$WatchdogTaskName = "AdjutantVoice Watchdog"
 $helper = Join-Path $Here "client_config.py"
 
 function Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
+function Stop-AdjutantVoiceServer {
+    # python(w).exe running run_mcp_server.pyw as its script, plus all descendants (the model worker).
+    $all = @(Get-CimInstance Win32_Process)
+    $ids = @($all | Where-Object {
+            $_.Name -in "python.exe", "pythonw.exe" -and $_.CommandLine -match '^"?[^"]*pythonw?\.exe"?\s+"?[^"]*\\run_mcp_server\.pyw"?\s*$'
+        } | ForEach-Object { $_.ProcessId })
+    do {
+        $more = @($all | Where-Object { $ids -contains $_.ParentProcessId -and $ids -notcontains $_.ProcessId } | ForEach-Object { $_.ProcessId })
+        $ids += $more
+    } while ($more.Count -gt 0)
+    foreach ($id in $ids) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
+}
 
-Step "Removing scheduled task '$TaskName'"
-if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+Step "Removing scheduled tasks '$WatchdogTaskName' and '$TaskName'"
+# Watchdog first, so it can't restart the server while we remove it.
+foreach ($name in $WatchdogTaskName, $TaskName) {
+    if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
+        Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $name -Confirm:$false
+    }
 }
 # Stopping the task can leave the windowless server (and its model worker) running.
-Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
-    Where-Object { $_.CommandLine -like "*run_mcp_server.pyw*" -or ($_.CommandLine -like "*multiprocessing*" -and $_.ExecutablePath -like "*\.adjutantvoice\venv\*") } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Stop-AdjutantVoiceServer
 
 Step "Removing Claude Code, Claude Desktop and Cursor registrations on Windows"
 if (Get-Command claude -ErrorAction SilentlyContinue) {
@@ -51,7 +65,7 @@ if (Get-Command wsl -ErrorAction SilentlyContinue) {
     & wsl -e python3 $wslHelper md-remove
 }
 
-foreach ($f in "run_mcp_server.pyw", "stdio_bridge.py") { Remove-Item (Join-Path $AvHome $f) -ErrorAction SilentlyContinue }
+foreach ($f in "run_mcp_server.pyw", "stdio_bridge.py", "watchdog.pyw", "watchdog.state.json") { Remove-Item (Join-Path $AvHome $f) -ErrorAction SilentlyContinue }
 if ($RemoveVenv) {
     Step "Deleting $AvHome\venv"
     Remove-Item -Recurse -Force (Join-Path $AvHome "venv")

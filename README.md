@@ -7,7 +7,8 @@ Built and tested on an Intel Arc 140V laptop (Core Ultra 7 258V, 32 GB, Windows 
 ## What you get
 
 - **Scheduled task "AdjutantVoice MCP"** starts the server at logon, without a window, listening on `127.0.0.1:8222` only. It runs in your session, so audio reaches your speakers.
-- **Model loaded on demand:** the model runs in a worker process that exits after 5 idle minutes. The server alone uses about 0.1 GB; a warm worker uses about 6.5 GB of RAM (shared with the Intel GPU).
+- **Model loaded on demand:** the server listens within seconds of logon; the model runs in a worker process started by the first request, which exits after 5 idle minutes. The server alone uses about 0.1 GB; a warm worker uses about 6.5 GB of RAM (shared with the Intel GPU).
+- **Watchdog:** a second task, "AdjutantVoice Watchdog", checks every 3 minutes that the server answers on its port. After two failed checks in a row it kills the server and its worker and restarts the task. This catches the case the server task can't see: a process that is still running but no longer accepting connections.
 - **Claude Code:** the `adjutantvoice` MCP server is registered at user scope on Windows and in WSL, so every session gets `tts_speak`, `tts_stream` and `tts_file`.
 - **Claude Desktop chat:** chat only launches stdio MCP servers, so it gets `stdio_bridge.py`, a small proxy that forwards to the running server. Chat and Code share one server and one model.
 - **Cursor:** registered in `~/.cursor/mcp.json` as an HTTP server (only if Cursor is installed).
@@ -68,7 +69,22 @@ schtasks /End /TN "AdjutantVoice MCP"; schtasks /Run /TN "AdjutantVoice MCP"
 | `AV_DTYPE` | `float16` | `float32` is ~3x slower on Intel XPU with no audible gain |
 | `AV_MCP_PORT` | `8222` | Re-run `install.ps1` after changing it so Claude Code gets the new URL |
 
-Log: `%USERPROFILE%\.adjutantvoice\server.log` (recreated at each start).
+Logs in `%USERPROFILE%\.adjutantvoice\`:
+
+| File | Contents |
+|---|---|
+| `server.log` | Current server run; the previous run is kept as `server.log.1` |
+| `watchdog.log` | Only failed checks, restarts and recoveries; nothing while healthy |
+
+## Troubleshooting
+
+If a Claude Code session says it couldn't reconnect to `adjutantvoice`, the server was probably down for a moment; the watchdog brings it back within about 6 minutes. Reconnect from the session's MCP servers menu, or start a new session. To restart it yourself right away:
+
+```powershell
+schtasks /End /TN "AdjutantVoice MCP"; schtasks /Run /TN "AdjutantVoice MCP"
+```
+
+Then check `watchdog.log` and `server.log.1` for what happened.
 
 ## Performance (Arc 140V, fp16, 24 steps)
 
@@ -76,9 +92,9 @@ Log: `%USERPROFILE%\.adjutantvoice\server.log` (recreated at each start).
 |---|---|
 | Short phrase, warm | ~4-5 s |
 | Long sentence (~130 characters), warm | ~6-8 s |
-| First request after an idle stop | ~30-35 s (Python imports ~13 s, model load ~7 s, first-generation GPU warm-up ~10-15 s) |
+| First request after logon or an idle stop | ~30-35 s (Python imports ~13 s, model load ~7 s, first-generation GPU warm-up ~10-15 s) |
 
-Running a game at the same time slows both down: the GPU and its memory are shared.
+Anything else using a lot of memory slows it down sharply, because the GPU shares system RAM: with a game running, or with under ~2 GB free (e.g. a large WSL VM plus a browser), the first request has taken 1.5-3.5 minutes and warm requests ~20 s.
 
 ## Intel GPU notes
 
@@ -99,6 +115,7 @@ Your `.env`, voice clones and the Hugging Face model cache are kept.
 |---|---|
 | `install.ps1` / `uninstall.ps1` | Set up / remove everything above |
 | `run_mcp_server.pyw` | Windowless launcher started by the scheduled task |
+| `watchdog.pyw` | Health check run by the watchdog task |
 | `.env.example` | Default settings |
 | `CLAUDE.snippet.md` | Announcements block added to `~/.claude/CLAUDE.md` |
 | `stdio_bridge.py` | stdio-to-HTTP proxy that Claude Desktop chat launches |

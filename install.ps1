@@ -13,7 +13,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Source = "git+https://github.com/xguz/AdjutantVoice@917a33702400a7fe149963e0613134074a9c0be3",
+    [string]$Source = "git+https://github.com/xguz/AdjutantVoice@7cce6c2b9dbd2eb682520af011a6acc7142c8636",
     [string]$PythonVersion = "3.11",
     [ValidateSet("xpu", "cuda", "cpu")]
     [string]$Torch = "xpu",
@@ -32,6 +32,8 @@ $Py = Join-Path $Venv "Scripts\python.exe"
 $PyW = Join-Path $Venv "Scripts\pythonw.exe"
 $EnvFile = Join-Path $AvHome ".env"
 $TaskName = "AdjutantVoice MCP"
+$WatchdogTaskName = "AdjutantVoice Watchdog"
+$WatchdogMinutes = 3
 
 function Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 # Native commands are judged by exit code only: in Windows PowerShell 5.1, stderr output
@@ -41,6 +43,18 @@ function Invoke-Checked {
     $ErrorActionPreference = "Continue"
     & $Exe @Arguments
     if ($LASTEXITCODE -ne 0) { throw "Command failed ($LASTEXITCODE): $Exe $($Arguments -join ' ')" }
+}
+function Stop-AdjutantVoiceServer {
+    # python(w).exe running run_mcp_server.pyw as its script, plus all descendants (the model worker).
+    $all = @(Get-CimInstance Win32_Process)
+    $ids = @($all | Where-Object {
+            $_.Name -in "python.exe", "pythonw.exe" -and $_.CommandLine -match '^"?[^"]*pythonw?\.exe"?\s+"?[^"]*\\run_mcp_server\.pyw"?\s*$'
+        } | ForEach-Object { $_.ProcessId })
+    do {
+        $more = @($all | Where-Object { $ids -contains $_.ParentProcessId -and $ids -notcontains $_.ProcessId } | ForEach-Object { $_.ProcessId })
+        $ids += $more
+    } while ($more.Count -gt 0)
+    foreach ($id in $ids) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
 }
 function Invoke-Quiet {
     # Returns stdout (stderr discarded); check $LASTEXITCODE afterwards.
@@ -86,6 +100,7 @@ $sourceArgs = $Source -split " "
 Invoke-Checked $Py (@("-m", "pip", "install", "--quiet") + $sourceArgs)
 # Make sure the requested revision is what's installed, even if the version number didn't change.
 Invoke-Checked $Py (@("-m", "pip", "install", "--quiet", "--no-deps", "--force-reinstall") + $sourceArgs)
+Invoke-Checked $Py @("-m", "pip", "install", "--quiet", "psutil")  # used by the watchdog
 
 $check = Invoke-Quiet $Py @("-c", "import torch; print(torch.__version__, 'xpu available:', torch.xpu.is_available())")
 Write-Host "    torch $check"
@@ -97,7 +112,7 @@ if (-not (Test-Path $EnvFile)) {
 } else {
     Step "Keeping existing $EnvFile"
 }
-foreach ($f in "run_mcp_server.pyw", "stdio_bridge.py") { Copy-Item (Join-Path $Here $f) (Join-Path $AvHome $f) -Force }
+foreach ($f in "run_mcp_server.pyw", "stdio_bridge.py", "watchdog.pyw") { Copy-Item (Join-Path $Here $f) (Join-Path $AvHome $f) -Force }
 
 $port = 8222
 $portLine = Select-String -Path $EnvFile -Pattern '^\s*AV_MCP_PORT\s*=\s*(\d+)' | Select-Object -Last 1
@@ -110,11 +125,14 @@ Invoke-Checked $Py @("-c", "from huggingface_hub import snapshot_download; snaps
 
 # --- Scheduled task --------------------------------------------------------------
 Step "Registering scheduled task '$TaskName' (runs at logon, windowless)"
-$existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-if ($existing) {
-    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+foreach ($name in $TaskName, $WatchdogTaskName) {
+    if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
+        Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $name -Confirm:$false
+    }
 }
+# Stopping the task can leave the windowless server (and its model worker) running and holding the port.
+Stop-AdjutantVoiceServer
 $user = "$env:USERDOMAIN\$env:USERNAME"
 $action = New-ScheduledTaskAction -Execute $PyW -Argument "`"$(Join-Path $AvHome 'run_mcp_server.pyw')`"" -WorkingDirectory $AvHome
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
@@ -135,6 +153,14 @@ while ((Get-Date) -lt $deadline -and -not $up) {
 }
 if (-not $up) { throw "Server did not start within 5 minutes; see $AvHome\server.log" }
 Write-Host "    listening on $McpUrl"
+
+Step "Registering scheduled task '$WatchdogTaskName' (health check every $WatchdogMinutes minutes)"
+$wdAction = New-ScheduledTaskAction -Execute $PyW -Argument "`"$(Join-Path $AvHome 'watchdog.pyw')`"" -WorkingDirectory $AvHome
+$wdTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes($WatchdogMinutes) -RepetitionInterval (New-TimeSpan -Minutes $WatchdogMinutes)
+$wdSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -StartWhenAvailable
+Register-ScheduledTask -TaskName $WatchdogTaskName -Action $wdAction -Trigger $wdTrigger -Settings $wdSettings -Principal $principal `
+    -Description "Restarts '$TaskName' if it stops answering on $McpUrl (log: ~/.adjutantvoice/watchdog.log)" | Out-Null
 
 # --- Claude Code: Windows ------------------------------------------------------
 $helper = Join-Path $Here "client_config.py"
