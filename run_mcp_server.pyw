@@ -11,9 +11,15 @@ from pathlib import Path
 # which re-imports this file as __mp_main__ in the child.
 if __name__ == "__main__":
     log_path = Path.home() / ".adjutantvoice" / "server.log"
-    if log_path.exists():  # keep the previous run's log for post-mortems
-        log_path.replace(log_path.with_name("server.log.1"))
-    log = open(log_path, "w", buffering=1, encoding="utf-8")
+    try:  # keep the previous run's log for post-mortems
+        if log_path.exists():
+            log_path.replace(log_path.with_name("server.log.1"))
+    except OSError:
+        # Still open by a process that is shutting down (e.g. right after the
+        # watchdog killed the old server): Windows refuses the rename. Append
+        # instead of crashing before anything is logged.
+        pass
+    log = open(log_path, "a", buffering=1, encoding="utf-8")
     sys.stdout = sys.stderr = log
     os.dup2(log.fileno(), 1)
     os.dup2(log.fileno(), 2)
