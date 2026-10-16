@@ -86,6 +86,8 @@ schtasks /End /TN "AdjutantVoice MCP"; schtasks /Run /TN "AdjutantVoice MCP"
 
 Then check `watchdog.log` and `server.log.1` for what happened.
 
+If a request fails with *"didn't finish loading the model within 240s"*, *"took longer than 240s"* or *"only X GB of memory is available"*, the machine is short on RAM: the model needs about 6.5 GB once running. The watchdog can't fix that, since the server itself is fine. Close memory-heavy apps (browser tabs, games, a large WSL VM) and try again. Tune `AV_MIN_AVAILABLE_MEMORY_GB` and `AV_WORKER_TIMEOUT_SECONDS` in `.env` to fail sooner or wait longer.
+
 ## Performance (Arc 140V, fp16, 24 steps)
 
 | | |
