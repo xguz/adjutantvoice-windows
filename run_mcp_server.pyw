@@ -26,6 +26,17 @@ if __name__ == "__main__":
     os.environ["AV_LOG_FILE"] = str(log_path)  # picked up by the model worker process
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
+    # Keep the Intel GPU driver's compiled kernels on disk (the worker inherits this).
+    # Measured on an Arc 140V: ~0.9 GB less memory per model start and a few seconds
+    # faster first speech, because the driver loads cached kernels instead of running
+    # its compiler. Costs ~1.1 GB of disk (deleted by uninstall.ps1 -RemoveVenv).
+    cache = Path.home() / ".adjutantvoice" / "kernel_cache"
+    for var, sub in (("NEO_CACHE_DIR", "neo"), ("SYCL_CACHE_DIR", "sycl")):
+        (cache / sub).mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault(var, str(cache / sub))
+    os.environ.setdefault("NEO_CACHE_PERSISTENT", "1")
+    os.environ.setdefault("SYCL_CACHE_PERSISTENT", "1")
+
     from adjutantvoice.mcp import start
 
     start()

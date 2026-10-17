@@ -4,7 +4,7 @@
   registrations installed by install.ps1.
 
 .PARAMETER RemoveVenv
-  Also delete ~/.adjutantvoice/venv. Your .env and voice clones in ~/.adjutantvoice are always kept,
+  Also delete ~/.adjutantvoice/venv and the GPU kernel cache. Your .env and voice clones are always kept,
   as is the downloaded model in the Hugging Face cache (~/.cache/huggingface).
 #>
 [CmdletBinding()]
@@ -67,8 +67,9 @@ if (Get-Command wsl -ErrorAction SilentlyContinue) {
 
 foreach ($f in "run_mcp_server.pyw", "stdio_bridge.py", "watchdog.pyw", "watchdog.state.json") { Remove-Item (Join-Path $AvHome $f) -ErrorAction SilentlyContinue }
 if ($RemoveVenv) {
-    Step "Deleting $AvHome\venv"
+    Step "Deleting $AvHome\venv and the GPU kernel cache"
     Remove-Item -Recurse -Force (Join-Path $AvHome "venv")
+    Remove-Item -Recurse -Force (Join-Path $AvHome "kernel_cache") -ErrorAction SilentlyContinue
 }
 
 Step "Done. Kept: $AvHome\.env, voice clones, and the Hugging Face model cache."

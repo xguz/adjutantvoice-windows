@@ -96,6 +96,8 @@ If a request fails with *"didn't finish loading the model within 240s"*, *"took 
 | Long sentence (~130 characters), warm | ~6-8 s |
 | First request after logon or an idle stop | ~30-35 s (Python imports ~13 s, model load ~7 s, first-generation GPU warm-up ~10-15 s) |
 
+The launcher turns on the Intel driver's on-disk kernel cache (`%USERPROFILE%\.adjutantvoice\kernel_cache`, ~1.1 GB). After the first start, the driver loads compiled GPU kernels instead of compiling them, which measured ~0.9 GB less memory per model start (5.6 GB instead of 6.5 GB) and a few seconds faster first speech.
+
 Anything else using a lot of memory slows it down sharply, because the GPU shares system RAM: with a game running, or with under ~2 GB free (e.g. a large WSL VM plus a browser), the first request has taken 1.5-3.5 minutes and warm requests ~20 s.
 
 ## Intel GPU notes
