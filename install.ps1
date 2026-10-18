@@ -8,15 +8,21 @@
   pip requirement for AdjutantVoice. Defaults to a pinned commit of the fork.
   For a local checkout you are editing, pass e.g. -Source "-e C:\path\to\AdjutantVoice".
 
+.PARAMETER Backend
+  Inference backend written to a new .env: openvino (default; no PyTorch at runtime,
+  ~2 GB instead of ~5.5 GB, ~2 s start) or torch. An existing .env is never changed.
+
 .PARAMETER Torch
   PyTorch build: xpu (Intel Arc, default), cuda (NVIDIA) or cpu.
 #>
 [CmdletBinding()]
 param(
-    [string]$Source = "git+https://github.com/xguz/AdjutantVoice@9bf4b5e937f9b1114ee5224dba7c4ee192eccc50",
+    [string]$Source = "git+https://github.com/xguz/AdjutantVoice@c85e987103c83de0f7bbf1fe287f17eeea9ec1b4",
     [string]$PythonVersion = "3.11",
     [ValidateSet("xpu", "cuda", "cpu")]
     [string]$Torch = "xpu",
+    [ValidateSet("openvino", "torch")]
+    [string]$Backend = "openvino",
     [switch]$SkipClaude,
     [switch]$SkipWsl,
     [switch]$SkipClaudeMd,
@@ -101,6 +107,8 @@ Invoke-Checked $Py (@("-m", "pip", "install", "--quiet") + $sourceArgs)
 # Make sure the requested revision is what's installed, even if the version number didn't change.
 Invoke-Checked $Py (@("-m", "pip", "install", "--quiet", "--no-deps", "--force-reinstall") + $sourceArgs)
 Invoke-Checked $Py @("-m", "pip", "install", "--quiet", "psutil")  # used by the watchdog
+# OpenVINO backend runtime (PyTorch stays installed: the export, voice cloning and AV_BACKEND=torch use it)
+Invoke-Checked $Py @("-m", "pip", "install", "--quiet", "openvino", "tokenizers")
 
 $check = Invoke-Quiet $Py @("-c", "import torch; print(torch.__version__, 'xpu available:', torch.xpu.is_available())")
 Write-Host "    torch $check"
@@ -108,7 +116,8 @@ Write-Host "    torch $check"
 # --- Config and launcher -------------------------------------------------------
 if (-not (Test-Path $EnvFile)) {
     Step "Creating $EnvFile from .env.example"
-    Copy-Item (Join-Path $Here ".env.example") $EnvFile
+    $lines = (Get-Content -Encoding UTF8 (Join-Path $Here ".env.example")) -replace "^AV_BACKEND=.*", "AV_BACKEND=$Backend"
+    [IO.File]::WriteAllLines($EnvFile, $lines)  # UTF-8 without BOM
 } else {
     Step "Keeping existing $EnvFile"
 }
@@ -123,6 +132,15 @@ Step "Downloading the OmniVoice model if needed (~2 GB on first install)"
 $env:HF_HUB_DISABLE_SYMLINKS_WARNING = "1"
 Invoke-Checked $Py @("-c", "from huggingface_hub import snapshot_download; snapshot_download('k2-fsa/OmniVoice')")
 
+$backendLine = Select-String -Path $EnvFile -Pattern '^\s*AV_BACKEND\s*=\s*(\w+)' | Select-Object -Last 1
+$effectiveBackend = if ($backendLine) { $backendLine.Matches[0].Groups[1].Value } else { "torch" }
+if ($effectiveBackend -eq "openvino") {
+    Step "Exporting the model for the OpenVINO backend (about a minute)"
+    Invoke-Checked (Join-Path $Venv "Scripts\av.exe") @("openvino", "export")
+} else {
+    Step "Backend is '$effectiveBackend'; skipping the OpenVINO export (run: av openvino export)"
+}
+
 # --- Scheduled task --------------------------------------------------------------
 Step "Registering scheduled task '$TaskName' (runs at logon, windowless)"
 foreach ($name in $TaskName, $WatchdogTaskName) {
@@ -136,7 +154,8 @@ Stop-AdjutantVoiceServer
 $user = "$env:USERDOMAIN\$env:USERNAME"
 $action = New-ScheduledTaskAction -Execute $PyW -Argument "`"$(Join-Path $AvHome 'run_mcp_server.pyw')`"" -WorkingDirectory $AvHome
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 `
+# Priority 5 = normal; the Task Scheduler default (7, below normal) slows speech whenever the machine is busy.
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -Priority 5 -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal `

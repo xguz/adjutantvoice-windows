@@ -7,7 +7,7 @@ Built and tested on an Intel Arc 140V laptop (Core Ultra 7 258V, 32 GB, Windows 
 ## What you get
 
 - **Scheduled task "AdjutantVoice MCP"** starts the server at logon, without a window, listening on `127.0.0.1:8222` only. It runs in your session, so audio reaches your speakers.
-- **Model loaded on demand:** the server listens within seconds of logon; the model runs in a worker process started by the first request, which exits after 5 idle minutes. The server alone uses about 0.1 GB; a warm worker uses about 6.5 GB of RAM (shared with the Intel GPU).
+- **Model loaded on demand:** the server listens within seconds of logon; the model runs in a worker process started by the first request, which exits after 5 idle minutes. The server alone uses about 0.1 GB; a warm worker uses about 2 GB of RAM with the default OpenVINO backend (about 5.5 GB with PyTorch), shared with the Intel GPU.
 - **Watchdog:** a second task, "AdjutantVoice Watchdog", checks every 3 minutes that the server answers on its port. After two failed checks in a row it kills the server and its worker and restarts the task. This catches the case the server task can't see: a process that is still running but no longer accepting connections.
 - **Claude Code:** the `adjutantvoice` MCP server is registered at user scope on Windows and in WSL, so every session gets `tts_speak`, `tts_stream` and `tts_file`.
 - **Claude Desktop chat:** chat only launches stdio MCP servers, so it gets `stdio_bridge.py`, a small proxy that forwards to the running server. Chat and Code share one server and one model.
@@ -34,6 +34,7 @@ It's safe to re-run, for example after changing the port or updating the pinned 
 | Option | Effect |
 |---|---|
 | `-Source "-e C:\path\to\AdjutantVoice"` | Install a local checkout in editable mode instead of the pinned commit |
+| `-Backend torch` | Write `AV_BACKEND=torch` to a new `.env` instead of `openvino` (an existing `.env` is never changed) |
 | `-Torch cuda` / `-Torch cpu` | Use an NVIDIA or CPU PyTorch build instead of Intel XPU |
 | `-SkipWsl` | Don't touch WSL |
 | `-SkipClaude` | Don't register with Claude Code at all |
@@ -86,17 +87,22 @@ schtasks /End /TN "AdjutantVoice MCP"; schtasks /Run /TN "AdjutantVoice MCP"
 
 Then check `watchdog.log` and `server.log.1` for what happened.
 
-If a request fails with *"didn't finish loading the model within 240s"*, *"took longer than 240s"* or *"only X GB of memory is available"*, the machine is short on RAM: the model needs about 6.5 GB once running. The watchdog can't fix that, since the server itself is fine. Close memory-heavy apps (browser tabs, games, a large WSL VM) and try again. Tune `AV_MIN_AVAILABLE_MEMORY_GB` and `AV_WORKER_TIMEOUT_SECONDS` in `.env` to fail sooner or wait longer.
+If a request fails with *"didn't finish loading the model within 240s"*, *"took longer than 240s"* or *"only X GB of memory is available"*, the machine is short on RAM: the model needs about 2 GB once running with OpenVINO (about 6.5 GB with PyTorch). The watchdog can't fix that, since the server itself is fine. Close memory-heavy apps (browser tabs, games, a large WSL VM) and try again. Tune `AV_MIN_AVAILABLE_MEMORY_GB` and `AV_WORKER_TIMEOUT_SECONDS` in `.env` to fail sooner or wait longer.
 
-## Performance (Arc 140V, fp16, 24 steps)
+## Performance (Arc 140V, 24 steps)
 
-| | |
-|---|---|
-| Short phrase, warm | ~4-5 s |
-| Long sentence (~130 characters), warm | ~6-8 s |
-| First request after logon or an idle stop | ~30-35 s (Python imports ~13 s, model load ~7 s, first-generation GPU warm-up ~10-15 s) |
+| | OpenVINO backend (default) | PyTorch backend |
+|---|---|---|
+| Model worker memory | ~2.0-2.3 GB | ~5.5 GB |
+| Worker start (warm caches) | ~2 s | ~25-30 s |
+| Short phrase, warm | ~4.5 s | ~4-5 s |
+| Long sentence (~130 characters), warm | ~6 s | ~6-8 s |
 
-The launcher turns on the Intel driver's on-disk kernel cache (`%USERPROFILE%\.adjutantvoice\kernel_cache`, ~1.1 GB). After the first start, the driver loads compiled GPU kernels instead of compiling them, which measured ~0.9 GB less memory per model start (5.6 GB instead of 6.5 GB) and a few seconds faster first speech.
+The OpenVINO backend runs a PyTorch-free port of OmniVoice on Intel's OpenVINO runtime; `install.ps1` runs the one-time `av openvino export` (about a minute). Its parity with OmniVoice was checked bit for bit; see the fork's [docs/OPENVINO.md](https://github.com/xguz/AdjutantVoice/blob/main/docs/OPENVINO.md). The first time a new sentence length is decoded, OpenVINO compiles the audio decoder for that shape (an extra 1-3 s once). Re-run `av openvino export` after creating a new voice clone. Switch back with `AV_BACKEND=torch` in `.env`.
+
+For the PyTorch backend, the launcher turns on the Intel driver's on-disk kernel cache (`%USERPROFILE%\.adjutantvoice\kernel_cache`, ~1.1 GB), which measured ~0.9 GB less memory per model start and a few seconds faster first speech.
+
+The server runs at normal priority; Task Scheduler's default (below normal) made speech slower whenever the machine was busy.
 
 Anything else using a lot of memory slows it down sharply, because the GPU shares system RAM: with a game running, or with under ~2 GB free (e.g. a large WSL VM plus a browser), the first request has taken 1.5-3.5 minutes and warm requests ~20 s.
 
