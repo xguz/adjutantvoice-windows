@@ -18,14 +18,16 @@ $AvHome = Join-Path $env:USERPROFILE ".adjutantvoice"
 $Py = Join-Path $AvHome "venv\Scripts\python.exe"
 $TaskName = "AdjutantVoice MCP"
 $WatchdogTaskName = "AdjutantVoice Watchdog"
+$TrayTaskName = "AdjutantVoice Tray"
 $helper = Join-Path $Here "client_config.py"
 
 function Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
-function Stop-AdjutantVoiceServer {
-    # python(w).exe running run_mcp_server.pyw as its script, plus all descendants (the model worker).
+function Stop-AdjutantVoiceScript([string]$Script) {
+    # python(w).exe running <Script>.pyw as its script, plus all descendants (e.g. the model worker).
+    $pattern = '^"?[^"]*pythonw?\.exe"?\s+"?[^"]*\\' + [regex]::Escape($Script) + '\.pyw"?\s*$'
     $all = @(Get-CimInstance Win32_Process)
     $ids = @($all | Where-Object {
-            $_.Name -in "python.exe", "pythonw.exe" -and $_.CommandLine -match '^"?[^"]*pythonw?\.exe"?\s+"?[^"]*\\run_mcp_server\.pyw"?\s*$'
+            $_.Name -in "python.exe", "pythonw.exe" -and $_.CommandLine -match $pattern
         } | ForEach-Object { $_.ProcessId })
     do {
         $more = @($all | Where-Object { $ids -contains $_.ParentProcessId -and $ids -notcontains $_.ProcessId } | ForEach-Object { $_.ProcessId })
@@ -34,16 +36,17 @@ function Stop-AdjutantVoiceServer {
     foreach ($id in $ids) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
 }
 
-Step "Removing scheduled tasks '$WatchdogTaskName' and '$TaskName'"
+Step "Removing scheduled tasks '$WatchdogTaskName', '$TaskName' and '$TrayTaskName'"
 # Watchdog first, so it can't restart the server while we remove it.
-foreach ($name in $WatchdogTaskName, $TaskName) {
+foreach ($name in $WatchdogTaskName, $TaskName, $TrayTaskName) {
     if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
         Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $name -Confirm:$false
     }
 }
 # Stopping the task can leave the windowless server (and its model worker) running.
-Stop-AdjutantVoiceServer
+Stop-AdjutantVoiceScript run_mcp_server
+Stop-AdjutantVoiceScript run_tray
 
 Step "Removing Claude Code, Claude Desktop and Cursor registrations on Windows"
 if (Get-Command claude -ErrorAction SilentlyContinue) {
@@ -65,7 +68,7 @@ if (Get-Command wsl -ErrorAction SilentlyContinue) {
     & wsl -e python3 $wslHelper md-remove
 }
 
-foreach ($f in "run_mcp_server.pyw", "stdio_bridge.py", "watchdog.pyw", "watchdog.state.json") { Remove-Item (Join-Path $AvHome $f) -ErrorAction SilentlyContinue }
+foreach ($f in "run_mcp_server.pyw", "stdio_bridge.py", "watchdog.pyw", "watchdog.state.json", "run_tray.pyw") { Remove-Item (Join-Path $AvHome $f) -ErrorAction SilentlyContinue }
 if ($RemoveVenv) {
     Step "Deleting $AvHome\venv and the GPU kernel cache"
     Remove-Item -Recurse -Force (Join-Path $AvHome "venv")

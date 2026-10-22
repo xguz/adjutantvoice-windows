@@ -13,6 +13,26 @@ Built and tested on an Intel Arc 140V laptop (Core Ultra 7 258V, 32 GB, Windows 
 - **Claude Desktop chat:** chat only launches stdio MCP servers, so it gets `stdio_bridge.py`, a small proxy that forwards to the running server. Chat and Code share one server and one model.
 - **Cursor:** registered in `~/.cursor/mcp.json` as an HTTP server (only if Cursor is installed).
 - **Spoken announcements:** a short block in your user-level `CLAUDE.md` asks Claude to say one sentence when it finishes a longer task or needs you.
+- **Tray icon** ("AdjutantVoice Tray" task, started at logon) to pause, mute, skip and set the volume; see [Playback controls](#playback-controls).
+
+## Playback controls
+
+Spoken messages queue up and play one at a time, in the order they arrived, 2 s apart. `tts_speak` returns as soon as a message is queued, so Claude isn't held up while it plays.
+
+The tray icon shows the state: blue idle, green speaking, amber paused, grey muted, red server not reachable.
+
+| Control | What it does |
+|---|---|
+| Left-click / **Pause**, **Resume** | Freezes the current message and holds the queue; nothing is lost |
+| **Skip current** | Stops the message that's playing; the queue carries on |
+| **Clear queue** | Drops the messages waiting to play |
+| **Mute** | Stops the current message, drops the queue, and drops new messages until unmuted (Claude is told they weren't spoken) |
+| **Volume** | 10 / 25 / 50 / 75 / 100 %; for a slider, use the control page |
+| **Recent messages** | Click one to play it again |
+| **Open control page** | `http://127.0.0.1:8222/control` in your browser: status, buttons, volume slider, history |
+| **Restart server**, **Open log**, **Open config** | Shortcuts |
+
+Volume and mute are remembered across restarts (`~/.adjutantvoice/player_state.json`). Quitting the tray icon doesn't stop the server; it comes back at the next logon, or run `schtasks /Run /TN "AdjutantVoice Tray"`.
 
 ## Requirements
 
@@ -76,6 +96,7 @@ Logs in `%USERPROFILE%\.adjutantvoice\`:
 |---|---|
 | `server.log` | Current server run; the previous run is kept as `server.log.1` |
 | `watchdog.log` | Only failed checks, restarts and recoveries; nothing while healthy |
+| `tray.log` | Tray icon (recreated at each start) |
 
 ## Troubleshooting
 
@@ -126,6 +147,7 @@ Your `.env`, voice clones and the Hugging Face model cache are kept.
 | `install.ps1` / `uninstall.ps1` | Set up / remove everything above |
 | `run_mcp_server.pyw` | Windowless launcher started by the scheduled task |
 | `watchdog.pyw` | Health check run by the watchdog task |
+| `run_tray.pyw` | Windowless launcher for the tray icon (`av tray`) |
 | `.env.example` | Default settings |
 | `CLAUDE.snippet.md` | Announcements block added to `~/.claude/CLAUDE.md` |
 | `stdio_bridge.py` | stdio-to-HTTP proxy that Claude Desktop chat launches |

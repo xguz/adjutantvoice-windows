@@ -17,7 +17,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Source = "git+https://github.com/xguz/AdjutantVoice@c85e987103c83de0f7bbf1fe287f17eeea9ec1b4",
+    [string]$Source = "git+https://github.com/xguz/AdjutantVoice@39e57cf8afdc7496714f29d55ffae629092fe146",
     [string]$PythonVersion = "3.11",
     [ValidateSet("xpu", "cuda", "cpu")]
     [string]$Torch = "xpu",
@@ -40,6 +40,7 @@ $EnvFile = Join-Path $AvHome ".env"
 $TaskName = "AdjutantVoice MCP"
 $WatchdogTaskName = "AdjutantVoice Watchdog"
 $WatchdogMinutes = 3
+$TrayTaskName = "AdjutantVoice Tray"
 
 function Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 # Native commands are judged by exit code only: in Windows PowerShell 5.1, stderr output
@@ -50,11 +51,12 @@ function Invoke-Checked {
     & $Exe @Arguments
     if ($LASTEXITCODE -ne 0) { throw "Command failed ($LASTEXITCODE): $Exe $($Arguments -join ' ')" }
 }
-function Stop-AdjutantVoiceServer {
-    # python(w).exe running run_mcp_server.pyw as its script, plus all descendants (the model worker).
+function Stop-AdjutantVoiceScript([string]$Script) {
+    # python(w).exe running <Script>.pyw as its script, plus all descendants (e.g. the model worker).
+    $pattern = '^"?[^"]*pythonw?\.exe"?\s+"?[^"]*\\' + [regex]::Escape($Script) + '\.pyw"?\s*$'
     $all = @(Get-CimInstance Win32_Process)
     $ids = @($all | Where-Object {
-            $_.Name -in "python.exe", "pythonw.exe" -and $_.CommandLine -match '^"?[^"]*pythonw?\.exe"?\s+"?[^"]*\\run_mcp_server\.pyw"?\s*$'
+            $_.Name -in "python.exe", "pythonw.exe" -and $_.CommandLine -match $pattern
         } | ForEach-Object { $_.ProcessId })
     do {
         $more = @($all | Where-Object { $ids -contains $_.ParentProcessId -and $ids -notcontains $_.ProcessId } | ForEach-Object { $_.ProcessId })
@@ -107,6 +109,8 @@ Invoke-Checked $Py (@("-m", "pip", "install", "--quiet") + $sourceArgs)
 # Make sure the requested revision is what's installed, even if the version number didn't change.
 Invoke-Checked $Py (@("-m", "pip", "install", "--quiet", "--no-deps", "--force-reinstall") + $sourceArgs)
 Invoke-Checked $Py @("-m", "pip", "install", "--quiet", "psutil")  # used by the watchdog
+# Playback with pause/volume (sounddevice) and the tray icon (pystray, Pillow)
+Invoke-Checked $Py @("-m", "pip", "install", "--quiet", "sounddevice", "pystray", "pillow")
 # OpenVINO backend runtime (PyTorch stays installed: the export, voice cloning and AV_BACKEND=torch use it)
 Invoke-Checked $Py @("-m", "pip", "install", "--quiet", "openvino", "tokenizers")
 
@@ -121,7 +125,7 @@ if (-not (Test-Path $EnvFile)) {
 } else {
     Step "Keeping existing $EnvFile"
 }
-foreach ($f in "run_mcp_server.pyw", "stdio_bridge.py", "watchdog.pyw") { Copy-Item (Join-Path $Here $f) (Join-Path $AvHome $f) -Force }
+foreach ($f in "run_mcp_server.pyw", "stdio_bridge.py", "watchdog.pyw", "run_tray.pyw") { Copy-Item (Join-Path $Here $f) (Join-Path $AvHome $f) -Force }
 
 $port = 8222
 $portLine = Select-String -Path $EnvFile -Pattern '^\s*AV_MCP_PORT\s*=\s*(\d+)' | Select-Object -Last 1
@@ -143,14 +147,15 @@ if ($effectiveBackend -eq "openvino") {
 
 # --- Scheduled task --------------------------------------------------------------
 Step "Registering scheduled task '$TaskName' (runs at logon, windowless)"
-foreach ($name in $TaskName, $WatchdogTaskName) {
+foreach ($name in $TaskName, $WatchdogTaskName, $TrayTaskName) {
     if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
         Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $name -Confirm:$false
     }
 }
 # Stopping the task can leave the windowless server (and its model worker) running and holding the port.
-Stop-AdjutantVoiceServer
+Stop-AdjutantVoiceScript run_mcp_server
+Stop-AdjutantVoiceScript run_tray
 $user = "$env:USERDOMAIN\$env:USERNAME"
 $action = New-ScheduledTaskAction -Execute $PyW -Argument "`"$(Join-Path $AvHome 'run_mcp_server.pyw')`"" -WorkingDirectory $AvHome
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
@@ -180,6 +185,14 @@ $wdSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Mi
     -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -StartWhenAvailable
 Register-ScheduledTask -TaskName $WatchdogTaskName -Action $wdAction -Trigger $wdTrigger -Settings $wdSettings -Principal $principal `
     -Description "Restarts '$TaskName' if it stops answering on $McpUrl (log: ~/.adjutantvoice/watchdog.log)" | Out-Null
+
+Step "Registering scheduled task '$TrayTaskName' (tray icon to pause, mute, skip, set volume)"
+$trayAction = New-ScheduledTaskAction -Execute $PyW -Argument "`"$(Join-Path $AvHome 'run_tray.pyw')`"" -WorkingDirectory $AvHome
+$traySettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -Priority 5 -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName $TrayTaskName -Action $trayAction -Trigger $trigger -Settings $traySettings -Principal $principal `
+    -Description "AdjutantVoice tray icon (log: ~/.adjutantvoice/tray.log)" | Out-Null
+Start-ScheduledTask -TaskName $TrayTaskName
 
 # --- Claude Code: Windows ------------------------------------------------------
 $helper = Join-Path $Here "client_config.py"
