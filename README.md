@@ -23,11 +23,12 @@ The tray icon shows the state: blue idle, green speaking, amber paused, grey mut
 
 | Control | What it does |
 |---|---|
-| Left-click / **Pause**, **Resume** | Freezes the current message and holds the queue; nothing is lost |
+| **Left-click the icon** | Opens a small panel above it with a **volume slider**, Pause/Resume, Skip and Mute, and the message playing. Click elsewhere or press Esc to close it. Right-click for the full menu |
+| **Pause**, **Resume** | Freezes the current message and holds the queue; nothing is lost |
 | **Skip current** | Stops the message that's playing; the queue carries on |
 | **Clear queue** | Drops the messages waiting to play |
 | **Mute** | Stops the current message, drops the queue, and drops new messages until unmuted (Claude is told they weren't spoken) |
-| **Volume** | 10 / 25 / 50 / 75 / 100 %; for a slider, use the control page |
+| **Volume** | The slider in the left-click panel, or presets (10 / 25 / 50 / 75 / 100 %) in the right-click menu |
 | **Recent messages** | Click one to play it again |
 | **Open control page** | `http://127.0.0.1:8222/control` in your browser: status, buttons, volume slider, history |
 | **Restart server**, **Open log**, **Open config** | Shortcuts |
