@@ -17,7 +17,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Source = "git+https://github.com/xguz/AdjutantVoice@ba2669396a04103c6ae1b5fbf4212d59e308c28b",
+    [string]$Source = "git+https://github.com/xguz/AdjutantVoice@3b87675cd68d789209a6ba61a63f3272264d365e",
     [string]$PythonVersion = "3.11",
     [ValidateSet("xpu", "cuda", "cpu")]
     [string]$Torch = "xpu",

@@ -3,6 +3,7 @@
 Run every few minutes by the "AdjutantVoice Watchdog" scheduled task. Restarts the
 server when it stops answering on its port -- including when the process is still
 running but no longer accepting connections, which the server task can't detect.
+Also restarts the tray icon if it died, unless it was quit from its own menu.
 Log: ~/.adjutantvoice/watchdog.log
 """
 import json
@@ -20,6 +21,7 @@ AV_HOME = Path.home() / ".adjutantvoice"
 LOG = AV_HOME / "watchdog.log"
 STATE = AV_HOME / "watchdog.state.json"
 TASK = "AdjutantVoice MCP"
+TRAY_TASK = "AdjutantVoice Tray"
 FAILURES_BEFORE_RESTART = 2
 # Don't judge a server that is still starting up.
 STARTUP_GRACE_SECONDS = int(os.environ.get("AV_WATCHDOG_GRACE_SECONDS", "180"))
@@ -58,12 +60,26 @@ def answers(port):
 def is_server(info):
     """python(w).exe running run_mcp_server.pyw as its script -- not just any
     process that mentions the file somewhere in its command line."""
+    return is_script(info, "run_mcp_server.pyw")
+
+
+def is_script(info, script):
     args = info["cmdline"] or []
     return (
         (info["name"] or "").lower() in ("python.exe", "pythonw.exe")
         and len(args) >= 2
-        and Path(args[1]).name == "run_mcp_server.pyw"
+        and Path(args[1]).name == script
     )
+
+
+def script_running(script):
+    for p in psutil.process_iter(["name", "cmdline"]):
+        try:
+            if is_script(p.info, script):
+                return True
+        except psutil.Error:
+            pass
+    return False
 
 
 def server_processes():
@@ -91,9 +107,28 @@ def restart(procs):
     return result.returncode == 0
 
 
+def check_tray(settings):
+    """Bring the tray icon back if it died, unless the user quit it from its menu."""
+    if settings.tray_quit_marker.exists() or script_running("run_tray.pyw"):
+        return
+    result = subprocess.run(["schtasks", "/Run", "/TN", TRAY_TASK], capture_output=True, text=True,
+                            creationflags=NO_WINDOW)
+    if result.returncode == 0:
+        log(f"tray icon wasn't running: started task '{TRAY_TASK}'")
+    elif "cannot find" not in (result.stderr or "").lower():  # task not installed: nothing to do
+        log(f"tray icon wasn't running and task '{TRAY_TASK}' failed to start: {result.stderr.strip()}")
+
+
 def main():
     from adjutantvoice.config import settings  # cheap: doesn't import torch
 
+    try:
+        check_server(settings)
+    finally:
+        check_tray(settings)
+
+
+def check_server(settings):
     port = settings.mcp_port
     failures = load_failures()
 

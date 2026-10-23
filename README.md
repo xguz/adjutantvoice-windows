@@ -8,7 +8,7 @@ Built and tested on an Intel Arc 140V laptop (Core Ultra 7 258V, 32 GB, Windows 
 
 - **Scheduled task "AdjutantVoice MCP"** starts the server at logon, without a window, listening on `127.0.0.1:8222` only. It runs in your session, so audio reaches your speakers.
 - **Model loaded on demand:** the server listens within seconds of logon; the model runs in a worker process started by the first request, which exits after 5 idle minutes. The server alone uses about 0.1 GB; a warm worker uses about 2 GB of RAM with the default OpenVINO backend (about 5.5 GB with PyTorch), shared with the Intel GPU.
-- **Watchdog:** a second task, "AdjutantVoice Watchdog", checks every 3 minutes that the server answers on its port. After two failed checks in a row it kills the server and its worker and restarts the task. This catches the case the server task can't see: a process that is still running but no longer accepting connections.
+- **Watchdog:** a second task, "AdjutantVoice Watchdog", checks every 3 minutes that the server answers on its port. After two failed checks in a row it kills the server and its worker and restarts the task. This catches the case the server task can't see: a process that is still running but no longer accepting connections. It also restarts the tray icon if it was closed by anything other than its own **Quit tray icon** menu item.
 - **Claude Code:** the `adjutantvoice` MCP server is registered at user scope on Windows and in WSL, so every session gets `tts_speak`, `tts_stream` and `tts_file`.
 - **Claude Desktop chat:** chat only launches stdio MCP servers, so it gets `stdio_bridge.py`, a small proxy that forwards to the running server. Chat and Code share one server and one model.
 - **Cursor:** registered in `~/.cursor/mcp.json` as an HTTP server (only if Cursor is installed).
@@ -33,7 +33,7 @@ The tray icon shows the state: blue idle, green speaking, amber paused, grey mut
 | **Open control page** | `http://127.0.0.1:8222/control` in your browser: status, buttons, volume slider, history |
 | **Restart server**, **Open log**, **Open config** | Shortcuts |
 
-Volume and mute are remembered across restarts (`~/.adjutantvoice/player_state.json`). Quitting the tray icon doesn't stop the server; it comes back at the next logon, or run `schtasks /Run /TN "AdjutantVoice Tray"`.
+Volume and mute are remembered across restarts (`~/.adjutantvoice/player_state.json`). Quitting the tray icon from its menu doesn't stop the server, and the watchdog leaves it closed until the next logon or `schtasks /Run /TN "AdjutantVoice Tray"`. If the tray closes any other way, the watchdog brings it back within about 3 minutes.
 
 ## Requirements
 
